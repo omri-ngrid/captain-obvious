@@ -2,6 +2,8 @@
 
 **AI agents write tests that can never fail. This skill deletes them.**
 
+![captain-obvious scanning a repo: proven findings are auto-deletable, advisory findings are surfaced only](assets/demo.svg)
+
 Every AI-generated test suite has them:
 
 ```python
@@ -54,14 +56,17 @@ test says "stable"), and "must not raise" contract tests.
 
 ## 📊 Real-world results
 
-- Internal repo, ~1,800 pytest tests: **228 lines of test theater deleted**
-  (15 whole tests + 58 assertion lines) — 73 assertions re-checking what mypy
-  guaranteed, one `assert True` with a comment admitting it. Suite stayed
-  green; the only failures before and after were pre-existing.
-- Hand-curated CLI repo, 733 tests: **zero deletions** (it doesn't invent
-  work) — but it flagged a test whose only assertion runs behind
-  `if (process.platform === 'darwin')` in a CI matrix with no macOS runner.
-  Green for months, asserting nothing.
+- Internal repo, ~1,800 pytest tests: **124 lines of test theater deleted
+  across 21 files** — 111 assertions re-checking what mypy already guaranteed,
+  plus one all-constant test. Type-checker green and full CI green before and
+  after; the change was auto-approved.
+- Hand-curated TypeScript CLI repo, ~730 tests: **zero deletions** (it doesn't
+  invent work) — but it caught one real bug: a `.rejects.toThrow(...)`
+  assertion that was never `await`ed, so it silently never ran.
+
+The tool ships to `--fix` only what it can *prove*, so the honest headline is
+not a line count — it's that you can run it on your own repo and trust that
+whatever it deletes could never have caught a regression. Clone it and check.
 
 ## 🚀 Install
 
@@ -102,6 +107,7 @@ python3 ... --fix --aggressive   # also assertion-free & mock-echo tests
 | `smoke-only` | `expect(fn).not.toThrow()` as the only check | report-only |
 | `self-compare-call` | `expect(f(a)).toEqual(f(a))` | report-only |
 | `broad-raises` | `pytest.raises(Exception)` as the only check | report-only |
+| `skipped-test` | `it.skip` / `xit` / `@pytest.mark.skip` — never runs | advisory |
 
 Full semantics, escape hatches, and false-positive guards:
 [`skills/captain-obvious/references/detectors.md`](skills/captain-obvious/references/detectors.md)
