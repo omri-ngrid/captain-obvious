@@ -24,12 +24,14 @@
  *
  * Levels:
  *   proven    provably cannot fail — deleted by --fix
- *   advisory  almost certainly useless but not provable — deleted by
- *             --fix --aggressive (except report-only categories)
+ *   advisory  almost certainly useless but not provable — never auto-deleted;
+ *             the agent running the skill adjudicates each one (delete / keep /
+ *             rewrite). The `deletable` field is a hint: `aggressive` = usually
+ *             a deletion, `report-only` = usually needs a rewrite.
  *
  * Usage:
  *   node captain_obvious_ts.mjs --project <dir|tsconfig.json>
- *        [--fix] [--aggressive] [--json <out.json>]
+ *        [--fix] [--json <out.json>]
  */
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -41,7 +43,6 @@ const argv = process.argv.slice(2);
 const argVal = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
 const projectArg = argVal('--project') ?? '.';
 const doFix = argv.includes('--fix');
-const aggressive = argv.includes('--aggressive');
 const jsonOut = argVal('--json');
 
 const projectPath = path.resolve(projectArg);
@@ -1035,7 +1036,7 @@ const removableTests = [];
 const removableStmts = [];
 
 for (const rec of testRecords) {
-  const wants = (f) => f.deletable === 'safe' || (aggressive && f.deletable === 'aggressive');
+  const wants = (f) => f.deletable === 'safe';
 
   if (rec.isDuplicate && wants(rec.findings.find(f => f.category === 'duplicate-test'))) {
     removableTests.push(rec);
@@ -1113,7 +1114,6 @@ const report = {
   plan: {
     testsToRemove: removableTests.map(r => ({ file: path.relative(projectDir, r.sf.fileName), line: r.line, test: r.title })),
     assertionsToRemove: removableStmts.length,
-    aggressive,
   },
   fixed: null,
 };
@@ -1156,7 +1156,7 @@ console.log('');
 for (const [cat, c] of Object.entries(summary)) {
   console.log(`  ${pad(cat, 20)} proven: ${c.proven}  advisory: ${c.advisory}`);
 }
-console.log(`\n  tests fully removable${aggressive ? ' (aggressive)' : ''}: ${removableTests.length}`);
+console.log(`\n  tests fully removable: ${removableTests.length}`);
 console.log(`  individual assertions removable: ${removableStmts.length}`);
 if (allFindings.length) {
   console.log('\nFindings:');

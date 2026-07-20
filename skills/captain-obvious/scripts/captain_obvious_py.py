@@ -20,12 +20,14 @@ Categories:
 
 Levels:
   proven    provably cannot fail — deleted by --fix
-  advisory  almost certainly useless but not provable — deleted by
-            --fix --aggressive (except report-only categories)
+  advisory  almost certainly useless but not provable — never auto-deleted; the
+            agent running the skill adjudicates each one (delete / keep /
+            rewrite). The `deletable` field is a hint: `aggressive` = usually a
+            deletion, `report-only` = usually needs a rewrite.
 
 Usage:
   python3 captain_obvious_py.py --path <project-dir>
-       [--fix] [--aggressive] [--json <out.json>] [--mypy "<cmd>"] [--no-types]
+       [--fix] [--json <out.json>] [--mypy "<cmd>"] [--no-types]
 """
 from __future__ import annotations
 
@@ -957,7 +959,7 @@ def _dangling_edits(rec, removed_nodes, lines):
     return edits
 
 
-def apply_fix(records: list[TestRecord], aggressive: bool, root: str):
+def apply_fix(records: list[TestRecord], root: str):
     # edits: (start, end, replacement) — replacement None means delete the span
     edits_by_file: dict[str, list[tuple[int, int, str | None]]] = {}
     file_lines: dict[str, list[str]] = {}
@@ -969,7 +971,7 @@ def apply_fix(records: list[TestRecord], aggressive: bool, root: str):
         return file_lines[f]
 
     def want(f: Finding) -> bool:
-        return f.deletable == "safe" or (aggressive and f.deletable == "aggressive")
+        return f.deletable == "safe"
 
     for rec in records:
         whole = False
@@ -1059,7 +1061,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", default=".")
     ap.add_argument("--fix", action="store_true")
-    ap.add_argument("--aggressive", action="store_true")
     ap.add_argument("--json")
     ap.add_argument("--mypy", help='mypy command, e.g. "uv run mypy"')
     ap.add_argument("--no-types", action="store_true", help="skip the mypy pass")
@@ -1099,7 +1100,7 @@ def main():
     for f in findings:
         summary.setdefault(f.category, {"proven": 0, "advisory": 0})[f.level] += 1
 
-    fixed = apply_fix(records, args.aggressive, root) if args.fix else None
+    fixed = apply_fix(records, root) if args.fix else None
 
     report = {
         "tool": "captain-obvious/py",
@@ -1109,7 +1110,6 @@ def main():
         "testsScanned": len(records),
         "findings": [f.to_dict(root) for f in findings],
         "summary": summary,
-        "aggressive": args.aggressive,
         "fixed": fixed,
     }
     if args.json:

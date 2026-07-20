@@ -2,8 +2,10 @@
 
 Both scripts emit the same JSON shape: `{findings: [{file, line, test, category,
 level, deletable, reason}], summary, plan/fixed}`. `level` is `proven` or
-`advisory`; `deletable` is `safe` (removed by `--fix`), `aggressive` (removed
-by `--fix --aggressive`), or `report-only` (never auto-removed).
+`advisory`; `deletable` is `safe` (removed by `--fix`) or, for advisories that
+the script never auto-removes, a hint for the agent's adjudication step:
+`aggressive` (usually a deletion once confirmed) or `report-only` (usually
+needs a rewrite, not a deletion).
 
 ## Categories
 

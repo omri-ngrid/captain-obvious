@@ -55,11 +55,11 @@ Show the user the summary table and the findings before deleting anything.
 - **advisory** — almost certainly useless but *not* provable (assertion-free
   tests, structural instanceof, mock-echo variants, index-signature-backed
   checks, rotten-green conditional asserts, unawaited async assertions). The
-  script cannot safely auto-delete these, but it records *exactly why* each is
-  uncertain. That reason is a question **you** are equipped to answer against
-  the surrounding code — so advisories are adjudicated by you (step 6), not
-  dumped on the user. `--aggressive` exists as a blunt escape hatch that deletes
-  the deletable advisories without adjudication; prefer step 6 over it.
+  script never auto-deletes these, but it records *exactly why* each is
+  uncertain, plus a `deletable` hint (`aggressive` = usually a deletion,
+  `report-only` = usually needs a rewrite). That reason is a question **you**
+  are equipped to answer against the surrounding code — so advisories are
+  adjudicated by you (step 6), not dumped on the user.
 
 See `references/detectors.md` for the full category catalog and the reasoning
 behind each guard.
@@ -77,8 +77,8 @@ LLM. This is the safe deterministic core; run it first.
 ### 6. Adjudicate the advisory tier (you decide, then confirm)
 
 Advisories are the cases determinism *can't* settle — and that's your job, not
-a report line for the user. Do **not** just forward the list, and do **not**
-reach for `--aggressive` (it deletes bluntly). For each advisory finding:
+a report line for the user. Do **not** just forward the list. For each advisory
+finding:
 
 1. Read the test and the code it exercises. The finding's `reason` field is a
    pointed question — e.g. *"structural instanceof — a shaped non-instance
