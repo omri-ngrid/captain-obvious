@@ -309,8 +309,10 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                     "no assertion, but the name/docstring suggests a deliberate must-not-raise contract test — review by hand"))
             else:
                 rec.findings.append(Finding(
-                    path, fn.lineno, fn.name, "no-assert", "advisory", "aggressive",
-                    "test contains no assertion — it can only fail if something raises"))
+                    path, fn.lineno, fn.name, "no-assert", "advisory", "report-only",
+                    "assertion-free smoke test — legitimate by design (it checks the code runs "
+                    "without raising). ICSE'19 distinguishes smoke tests from rotten tests; only "
+                    "worth a look if an assertion was clearly intended here"))
             return
         if not live:
             rec.findings.append(Finding(
@@ -1056,6 +1058,62 @@ def apply_fix(records: list[TestRecord], root: str):
             "filesChanged": files_changed}
 
 
+# ------------------------------------------------------------------ coverage
+def load_coverage(path: str, root: str):
+    """Load line coverage (the dynamic signal ICSE'19 uses to separate rotten
+    from good). Supports coverage.py json, lcov (DA: records), and istanbul
+    coverage-final.json. Returns {(relpath, line): hits} or None."""
+    try:
+        raw = open(path, encoding="utf-8").read()
+    except OSError:
+        return None
+    cov: dict[tuple[str, int], int] = {}
+
+    def put(absf: str, line: int, hits: int):
+        rel = os.path.relpath(absf, root).replace(os.sep, "/")
+        key = (rel, line)
+        cov[key] = max(cov.get(key, 0), hits)
+
+    def absol(p: str) -> str:
+        return p if os.path.isabs(p) else os.path.join(root, p)
+
+    stripped = raw.lstrip()
+    if stripped[:1] in ("{", "["):
+        try:
+            data = json.loads(raw)
+        except (ValueError, json.JSONDecodeError):
+            return None
+        if isinstance(data, dict) and isinstance(data.get("files"), dict):   # coverage.py json
+            for p, d in data["files"].items():
+                for ln in d.get("executed_lines", []):
+                    put(absol(p), ln, 1)
+                for ln in d.get("missing_lines", []):
+                    put(absol(p), ln, 0)
+        elif isinstance(data, dict):                                          # istanbul json
+            for p, d in data.items():
+                if not isinstance(d, dict) or "statementMap" not in d or "s" not in d:
+                    continue
+                for sid, loc in d["statementMap"].items():
+                    ln = (loc or {}).get("start", {}).get("line")
+                    if ln is None:
+                        continue
+                    put(absol(d.get("path", p)), ln, d["s"].get(sid, 0))
+    else:                                                                     # lcov
+        cur = None
+        for line in raw.splitlines():
+            if line.startswith("SF:"):
+                cur = absol(line[3:].strip())
+            elif line.startswith("DA:") and cur:
+                parts = line[3:].split(",")
+                try:
+                    put(cur, int(parts[0]), int(parts[1]))
+                except (ValueError, IndexError):
+                    continue
+            elif line.startswith("end_of_record"):
+                cur = None
+    return cov or None
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser()
@@ -1064,6 +1122,8 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--mypy", help='mypy command, e.g. "uv run mypy"')
     ap.add_argument("--no-types", action="store_true", help="skip the mypy pass")
+    ap.add_argument("--coverage", help="coverage file (coverage.py json / lcov / istanbul json): "
+                                       "confirm conditional-assert findings against real line coverage")
     args = ap.parse_args()
 
     root = os.path.abspath(args.path)
@@ -1096,6 +1156,30 @@ def main():
     mark_duplicates(records)
 
     findings = [f for r in records for f in r.findings]
+
+    # coverage confirmation: turn the static conditional-assert guess into a fact
+    cov = load_coverage(args.coverage, root) if args.coverage else None
+    cov_promoted, cov_suppressed = 0, 0
+    cov_note = None
+    if args.coverage and cov is None:
+        cov_note = "could not parse coverage (expected coverage.py json / lcov / istanbul json)"
+    elif cov is not None:
+        kept = []
+        for f in findings:
+            if f.category == "conditional-assert":
+                rel = os.path.relpath(f.file, root).replace(os.sep, "/")
+                hits = cov.get((rel, f.line))
+                if hits == 0:
+                    f.level = "proven"
+                    f.reason += (" — coverage confirms it ran 0 times: rotten (ICSE'19). "
+                                 "Fix the guard so it fires, or remove it")
+                    cov_promoted += 1
+                elif hits is not None and hits > 0:
+                    cov_suppressed += 1
+                    continue  # demonstrably executes — not rotten, drop it
+            kept.append(f)
+        findings = kept
+
     summary: dict[str, dict[str, int]] = {}
     for f in findings:
         summary.setdefault(f.category, {"proven": 0, "advisory": 0})[f.level] += 1
@@ -1110,6 +1194,9 @@ def main():
         "testsScanned": len(records),
         "findings": [f.to_dict(root) for f in findings],
         "summary": summary,
+        "coverage": ({"file": args.coverage, "conditionalAssertsPromoted": cov_promoted,
+                      "conditionalAssertsSuppressed": cov_suppressed} if cov is not None
+                     else ({"file": args.coverage, "error": cov_note} if args.coverage else None)),
         "fixed": fixed,
     }
     if args.json:
@@ -1122,6 +1209,11 @@ def main():
     print()
     for cat, c in summary.items():
         print(f"  {cat:<20} proven: {c['proven']}  advisory: {c['advisory']}")
+    if cov is not None:
+        print(f"  coverage: {cov_promoted} conditional-assert(s) confirmed rotten, "
+              f"{cov_suppressed} confirmed reached (dropped)")
+    elif cov_note:
+        print(f"  coverage: {cov_note}")
     if findings:
         print("\nFindings:")
         for f in findings:

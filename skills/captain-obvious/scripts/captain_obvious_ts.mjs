@@ -31,7 +31,13 @@
  *
  * Usage:
  *   node captain_obvious_ts.mjs --project <dir|tsconfig.json>
- *        [--fix] [--json <out.json>]
+ *        [--fix] [--json <out.json>] [--coverage <lcov|istanbul-json>]
+ *
+ * With --coverage, conditional-assert findings are confirmed against real line
+ * coverage (the dynamic half of the ICSE'19 rotten-green analysis): an assertion
+ * whose line executed 0 times is promoted to proven-rotten; one that did execute
+ * is a confirmed false positive and is dropped. Accepts lcov (DA: records),
+ * istanbul coverage-final.json, or coverage.py json.
  */
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -44,6 +50,7 @@ const argVal = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] :
 const projectArg = argVal('--project') ?? '.';
 const doFix = argv.includes('--fix');
 const jsonOut = argVal('--json');
+const coverageArg = argVal('--coverage');
 
 const projectPath = path.resolve(projectArg);
 const isFile = fs.existsSync(projectPath) && fs.statSync(projectPath).isFile();
@@ -845,8 +852,10 @@ function analyzeTest(sf, { stmt, title, fn, skipped }) {
   }
 
   if (realAsserts.length === 0) {
-    rec.findings.push({ category: 'no-assert', level: 'advisory', deletable: 'aggressive',
-      reason: 'test contains no assertion — it can only fail if something throws', stmtRef: null });
+    rec.findings.push({ category: 'no-assert', level: 'advisory', deletable: 'report-only',
+      reason: 'assertion-free smoke test — legitimate by design (it checks the code runs ' +
+        "without throwing). ICSE'19 distinguishes smoke tests from rotten tests; only worth a " +
+        'look if an assertion was clearly intended here', stmtRef: null });
     for (const f of rec.findings) allFindings.push(toReportFinding(rec, f));
     testRecords.push(rec);
     return;
@@ -929,7 +938,7 @@ function analyzeTest(sf, { stmt, title, fn, skipped }) {
         const cline = sf.getLineAndCharacterOfPosition(c.getStart(sf)).line + 1;
         rec.findings.push({ category: 'conditional-assert', level: 'advisory', deletable: 'report-only',
           reason: `assertion at line ${cline} is gated behind an if — it may never execute (rotten green)`,
-          stmtRef: null });
+          covLine: cline, stmtRef: null });
       }
     }
   }
@@ -963,11 +972,66 @@ function analyzeTest(sf, { stmt, title, fn, skipped }) {
 function toReportFinding(rec, f) {
   return {
     file: path.relative(projectDir, rec.sf.fileName),
-    line: f.stmtRef ? rec.sf.getLineAndCharacterOfPosition(f.stmtRef.getStart(rec.sf)).line + 1 : rec.line,
+    line: f.stmtRef ? rec.sf.getLineAndCharacterOfPosition(f.stmtRef.getStart(rec.sf)).line + 1 : (f.covLine ?? rec.line),
     test: rec.title,
     category: f.category, level: f.level, deletable: f.deletable,
     snippet: f.stmtRef ? f.stmtRef.getText(rec.sf).slice(0, 160) : undefined,
     reason: f.reason,
+  };
+}
+
+// ------------------------------------------------------------ coverage
+// Load line coverage (the dynamic signal ICSE'19 uses to separate rotten from
+// good). Supports lcov (DA: records), istanbul coverage-final.json, and
+// coverage.py json. Returns { hits(relFile, line) -> count | undefined }.
+function loadCoverage(file, projectDir) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  const map = new Map(); // posix relPath -> Map<line, hits>
+  const norm = (p) => path.relative(projectDir, path.isAbsolute(p) ? p : path.resolve(projectDir, p))
+    .split(path.sep).join('/');
+  const put = (p, line, hits) => {
+    const rel = norm(p);
+    let m = map.get(rel);
+    if (!m) { m = new Map(); map.set(rel, m); }
+    m.set(line, Math.max(m.get(line) ?? 0, hits));
+  };
+  const trimmed = raw.trimStart();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let json;
+    try { json = JSON.parse(raw); } catch { return null; }
+    if (json && json.files && typeof json.files === 'object') {          // coverage.py json
+      for (const [p, d] of Object.entries(json.files)) {
+        for (const ln of d.executed_lines ?? []) put(p, ln, 1);
+        for (const ln of d.missing_lines ?? []) put(p, ln, 0);
+      }
+    } else if (json && typeof json === 'object') {                       // istanbul coverage-final.json
+      for (const [p, d] of Object.entries(json)) {
+        if (!d || !d.statementMap || !d.s) continue;
+        for (const [id, loc] of Object.entries(d.statementMap)) {
+          const line = loc?.start?.line;
+          if (line == null) continue;
+          put(d.path ?? p, line, d.s[id] ?? 0);
+        }
+      }
+    }
+  } else {                                                               // lcov
+    let cur = null;
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.startsWith('SF:')) cur = line.slice(3).trim();
+      else if (line.startsWith('DA:') && cur) {
+        const [ln, hits] = line.slice(3).split(',');
+        put(cur, parseInt(ln, 10), parseInt(hits, 10) || 0);
+      } else if (line.startsWith('end_of_record')) cur = null;
+    }
+  }
+  if (map.size === 0) return null;
+  return {
+    hits(relFile, line) {
+      const m = map.get(String(relFile).split(path.sep).join('/'));
+      if (!m) return undefined;
+      return m.has(line) ? m.get(line) : undefined;
+    },
   };
 }
 
@@ -1029,6 +1093,31 @@ for (const file of testFiles) {
       seenGlobal.set(gkey, rec);
     }
   }
+}
+
+// ------------------------------------------------------------ coverage confirm
+// Turn the static conditional-assert guess into a fact: an assertion whose line
+// never ran is proven rotten; one that did run is a confirmed false positive.
+const coverage = coverageArg ? loadCoverage(coverageArg, projectDir) : null;
+let coveragePromoted = 0, coverageSuppressed = 0;
+if (coverage) {
+  const kept = [];
+  for (const f of allFindings) {
+    if (f.category === 'conditional-assert') {
+      const hits = coverage.hits(f.file, f.line);
+      if (hits === 0) {
+        f.level = 'proven';
+        f.reason += " — coverage confirms it ran 0 times: rotten (ICSE'19). Fix the guard so it fires, or remove it";
+        coveragePromoted++;
+      } else if (hits > 0) {
+        coverageSuppressed++;
+        continue; // the assertion demonstrably executes — not rotten, drop the finding
+      }
+      // hits === undefined → no coverage data for this line, leave as static advisory
+    }
+    kept.push(f);
+  }
+  allFindings.splice(0, allFindings.length, ...kept);
 }
 
 // ------------------------------------------------------------ decide removals
@@ -1111,6 +1200,9 @@ const report = {
   testsScanned: testRecords.length,
   findings: allFindings,
   summary,
+  coverage: coverage
+    ? { file: coverageArg, conditionalAssertsPromoted: coveragePromoted, conditionalAssertsSuppressed: coverageSuppressed }
+    : (coverageArg ? { file: coverageArg, error: 'could not parse coverage (expected lcov / istanbul json / coverage.py json)' } : null),
   plan: {
     testsToRemove: removableTests.map(r => ({ file: path.relative(projectDir, r.sf.fileName), line: r.line, test: r.title })),
     assertionsToRemove: removableStmts.length,
@@ -1158,6 +1250,11 @@ for (const [cat, c] of Object.entries(summary)) {
 }
 console.log(`\n  tests fully removable: ${removableTests.length}`);
 console.log(`  individual assertions removable: ${removableStmts.length}`);
+if (coverage) {
+  console.log(`  coverage: ${coveragePromoted} conditional-assert(s) confirmed rotten, ${coverageSuppressed} confirmed reached (dropped)`);
+} else if (coverageArg) {
+  console.log('  coverage: could not parse the coverage file (expected lcov / istanbul json / coverage.py json)');
+}
 if (allFindings.length) {
   console.log('\nFindings:');
   for (const f of allFindings) {

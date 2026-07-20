@@ -43,6 +43,13 @@ python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --json /tmp/co-p
   degrades gracefully to the syntactic categories.
 - The TS detector resolves the project's own `typescript` package; without a
   tsconfig it degrades to syntactic categories.
+- **If the project already produces coverage** (or you can cheaply run it),
+  pass `--coverage <file>` (lcov / istanbul `coverage-final.json` / coverage.py
+  `coverage json`). This is the dynamic half of the ICSE'19 rotten-green
+  analysis: a `conditional-assert` whose line never ran is promoted to **proven
+  rotten**, and one that did run is dropped as a confirmed false positive. It
+  turns the noisiest advisory category into a trustworthy one — use it whenever
+  coverage is available.
 
 Show the user the summary table and the findings before deleting anything.
 
@@ -90,7 +97,9 @@ finding:
    is valid but the assertion is broken). Rewrite is the advisory tier's real
    value: fix the unawaited `.rejects` (`await` it), narrow a
    `pytest.raises(Exception)` to the specific type, repair a rotten-green
-   `conditional-assert` so it actually runs.
+   `conditional-assert` so it actually runs. Note `no-assert` findings are
+   **smoke tests** — legitimate by design (ICSE'19); default to **keep** unless
+   the test clearly *meant* to assert something and forgot.
 3. **Propose before acting.** Present a compact per-item table — finding,
    verdict, one-line rationale, and the exact edit for rewrites — and apply
    only what the user approves. Never auto-delete or auto-rewrite an advisory.

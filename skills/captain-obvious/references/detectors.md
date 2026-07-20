@@ -13,13 +13,13 @@ needs a rewrite, not a deletion).
 |---|---|---|
 | `type-guaranteed` | Assertion re-checks a fact the type checker proves: `expect(typeof f()).toBe('number')`, `toBeDefined()`/`not.toBeNull()` on non-nullable types, `toBeInstanceOf` on nominal classes, `toBeTruthy` on object types, `Array.isArray` on arrays, `expect.any(Ctor)`/`expect.anything()`, `toHaveProperty` on required props; Python: `assert isinstance(x, T)` / `assert x is not None` / `type(x) is T` checked against mypy `reveal_type` | proven / advisory |
 | `constant-assert` | Tautologies: `expect(true).toBe(true)`, `assert 1 == 1`, `expect(x).toBe(x)`, `assert x == x` on side-effect-free chains | proven |
-| `no-assert` | No assertion anywhere in the test (the "Unknown Test" smell) — passes silently by design of the framework | advisory |
+| `no-assert` | No assertion anywhere in the test. Per *Rotten Green Tests* (ICSE '19) this is a **smoke test** — legitimate by design (it verifies the code runs without throwing), **not** a rotten test. Surfaced (never a delete candidate) only so a human can spot the rare case where an assertion was clearly intended but forgotten | advisory, report-only |
 | `mock-echo` | Test asserts the mock does what it was just stubbed to do: `m.mockReturnValue(5); expect(m()).toBe(5)`, or calls `m()` then asserts `toHaveBeenCalled()` | proven (direct) / advisory (indirect) |
 | `duplicate-test` | Body identical to an earlier test. **Same file + same class/describe scope → proven** (auto-deletable). **Different file or scope → advisory** (surfaced only — a shared body can behave differently under a different conftest/fixture set or `beforeEach`, so a human picks which to keep). Comparison is comment/formatting-insensitive but **literal-sensitive** (whitespace *inside* a string/template literal counts), so whitespace-handling tests are not merged. When two identical-bodied tests' names materially diverge, the finding is flagged as a likely copy-paste bug that leaves the named behaviour untested | proven / advisory |
 | `dead-assert` | Assertion after an unconditional `return`/`throw`/`raise` — unreachable | proven |
 | `swallowed-assert` | Assertion inside `try` with an empty/`pass`/console-only catch — a failure is absorbed | proven, report-only |
 | `never-asserts` | Test has assertions but ALL are dead or swallowed → the test cannot fail | proven |
-| `conditional-assert` | Assertion gated behind `if` (rotten green test, ICSE '19) — may never execute (e.g. `if (process.platform === 'darwin')` in Linux-only CI). Two shapes are deliberately NOT flagged, being common legit style: loop-nested asserts (`for x in items: if …: assert`), and asserts whose guard is keyed on a parametrized/fixture argument (`if mode: … else: …` — every branch runs across the parametrization) | advisory, report-only |
+| `conditional-assert` | Assertion gated behind `if` (rotten green test, ICSE '19) — may never execute (e.g. `if (process.platform === 'darwin')` in Linux-only CI). Two shapes are deliberately NOT flagged, being common legit style: loop-nested asserts (`for x in items: if …: assert`), and asserts whose guard is keyed on a parametrized/fixture argument (`if mode: … else: …` — every branch runs across the parametrization). Statically this is a *guess*; with `--coverage` it becomes a fact (see below) | advisory, report-only (proven with coverage) |
 | `boundary-tautology` | `expect(x.length).toBeGreaterThanOrEqual(0)` / `assert len(x) >= 0` — a length can never be negative | proven |
 | `local-const-echo` | `const expected = 5; expect(expected).toBe(5)` — the test asserts its own arrangement, code under test never involved | proven |
 | `floating-async-assert` | `expect(p).resolves/.rejects...` without `await`. Runner-dependent severity: Jest silently never evaluates it (real silent-pass bug); bun:test and modern Vitest fail the test at settle time (style/portability issue). Needs `await` added, so report-only | advisory, report-only |
@@ -102,6 +102,31 @@ about the code under test.
   dead assignments are dropped. Orphaned *imports* are left to the project's
   linter (`ruff --fix`), which resolves cross-file usage correctly.
 
+## Coverage mode (`--coverage <file>`) — the dynamic half
+
+`conditional-assert` is, on its own, a *static guess*: an assertion behind an
+`if` **might** never run. The rotten-green literature (Delplanque ICSE'19, RTj,
+Google Test) all resolve this the same way — by **executing** the suite and
+seeing which assertions actually fired. Those tools instrument the framework or
+VM directly. We can't modify Jest/Vitest/pytest, so we consume the **line
+coverage those runners already emit** — which is precisely the coverage-based
+alternative Robinson (ESEC/FSE'23) identified but set aside, since he could
+instrument Google Test itself and we cannot.
+
+Pass `--coverage` a coverage file and each `conditional-assert` is reconciled
+against its line's hit count:
+
+- **ran 0 times** → promoted from advisory to **proven rotten** (fix the guard
+  so it fires, or remove it — a genuine bug, per the papers);
+- **ran ≥1 time** → a confirmed **false positive**; the finding is dropped;
+- **no data for that line** → left as a static advisory, unchanged.
+
+Accepted formats (both ecosystems, one flag): **lcov** (`DA:<line>,<hits>`
+records — c8/nyc/jest/`coverage lcov` all emit it), **istanbul**
+`coverage-final.json`, and **coverage.py** `coverage json`. The proven tier
+(type-guaranteed, tautology, etc.) is untouched by coverage — only the
+execution-dependent `conditional-assert` category is refined.
+
 ## False-positive guards (learned from real repos)
 
 - **Custom assertion helpers**: any called function matching
@@ -118,9 +143,28 @@ about the code under test.
 
 ## Grounding
 
-- Rotten Green Tests — Delplanque et al., ICSE 2019 (assertions that never execute)
-- Test smell catalogs / tsDetect, JNose ("Unknown Test", "Duplicate Assert", "Conditional Test Logic")
-- Pseudo-tested methods — Niedermayr 2016, Descartes ASE 2018 (the dynamic ceiling this static tool approximates)
+The rotten-green lineage — this tool extends it to TypeScript + Python:
+
+- **Rotten Green Tests** — Delplanque, Ducasse, Polito, Black, Etien, **ICSE 2019**
+  (Pharo). Defines the rotten green test and the four categories: *context-dependent*
+  (different asserts per branch), *missed fail* (a forced-fail marker that never runs),
+  *skip* (an early return/guard that strands later asserts), *fully rotten*.
+- **RTj** — Martinez, Etien, Ducasse, Fuhrman, **2019** (arXiv:1912.07322): the same
+  detection for **Java/JUnit**, static (Spoon AST) + instrumented execution, and it
+  **refactors** rotten tests, not just flags them — the basis for our advisory *rewrite*
+  path. 427 rotten tests across 26 GitHub projects.
+- **Rotten Green Tests in Google Test** — Robinson, **ESEC/FSE 2023** (C++): detection
+  built into the framework (each assertion carries an `executed` flag). Explicitly weighs
+  and rejects **coverage-based** detection *because he could instrument the framework*;
+  as an external tool we can't, so `--coverage` is exactly that alternative. 183 rotten
+  assertions in LLVM/Clang.
+
+Supporting:
+
+- Test smell catalogs / tsDetect, JNose ("Unknown Test" = smoke test, "Duplicate Assert",
+  "Conditional Test Logic")
+- Pseudo-tested methods — Niedermayr 2016, Descartes ASE 2018 (the mutation-testing ceiling
+  this static tool approximates)
 - "On the Diffusion of Test Smells in LLM-Generated Unit Tests" (2024) — smells in 38–100% of LLM suites
 - TS unsoundness checklist — Effective TypeScript, "Seven Sources of Unsoundness"
 

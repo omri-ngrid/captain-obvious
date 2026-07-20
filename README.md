@@ -84,7 +84,16 @@ python3 skills/captain-obvious/scripts/captain_obvious_py.py  --path <repo> --my
 
 # delete proven findings (needs a clean git tree — review the diff after)
 node ... --fix
+
+# confirm rotten-green asserts against real coverage (lcov / istanbul / coverage.py)
+node    ... --coverage coverage/lcov.info
+python3 ... --coverage coverage.json
 ```
+
+With `--coverage`, a `conditional-assert` whose line never executed is promoted
+to **proven rotten**; one that did execute is a confirmed false positive and is
+dropped — the dynamic half of the ICSE'19 analysis, using coverage your runner
+already emits.
 
 ## 🔍 Detector catalog
 
@@ -97,7 +106,7 @@ node ... --fix
 | `mock-echo` | stub returns 5 → assert it returns 5 | proven / advisory |
 | `dead-assert` / `swallowed-assert` / `never-asserts` | assertion after `return`, or inside `try {} catch {}` | proven |
 | `duplicate-test` | identical body in the same suite | proven |
-| `no-assert` | no assertion anywhere ("Unknown Test" smell) | advisory |
+| `no-assert` | no assertion anywhere — a **smoke test** (legit by design, per ICSE '19), surfaced not deleted | advisory |
 | `conditional-assert` | assertion gated behind `if` — rotten green (ICSE '19) | advisory |
 | `floating-async-assert` | unawaited `expect(p).rejects...` (silent pass under Jest) | advisory |
 | `smoke-only` | `expect(fn).not.toThrow()` as the only check | advisory |
@@ -105,10 +114,10 @@ node ... --fix
 | `broad-raises` | `pytest.raises(Exception)` as the only check | advisory |
 | `skipped-test` | `it.skip` / `xit` / `@pytest.mark.skip` — never runs | advisory |
 
-Full semantics, escape hatches, and false-positive guards — plus academic
-grounding (ICSE '19 *Rotten Green Tests*, tsDetect/JNose smell catalogs,
-Descartes pseudo-tested methods) — are in
-[`references/detectors.md`](skills/captain-obvious/references/detectors.md).
+Full semantics, escape hatches, and false-positive guards — plus the academic
+grounding (the rotten-green lineage: Delplanque *ICSE '19* → RTj Java '19 →
+Robinson *ESEC/FSE '23* Google Test, which this tool extends to TS + Python) —
+are in [`references/detectors.md`](skills/captain-obvious/references/detectors.md).
 
 ## ⚠️ Honest limitations
 
