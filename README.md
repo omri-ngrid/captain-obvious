@@ -1,5 +1,9 @@
 # Captain Obvious 🫡
 
+<p align="center">
+  <img src="assets/logo.png" width="200" alt="Captain Obvious Logo" />
+</p>
+
 **AI agents write tests that can never fail. This skill deletes them.**
 
 ![captain-obvious scanning a repo: proven findings are auto-deletable, advisory findings are surfaced only](assets/demo.svg)
