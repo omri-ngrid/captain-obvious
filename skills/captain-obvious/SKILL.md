@@ -52,46 +52,75 @@ Show the user the summary table and the findings before deleting anything.
   escape hatches (`any`/`unknown`, `as` casts, `!`, index signatures, unchecked
   index access, structural `instanceof`, custom assertion helpers). Safe to
   auto-delete.
-- **advisory** — almost certainly useless but not provable (assertion-free
+- **advisory** — almost certainly useless but *not* provable (assertion-free
   tests, structural instanceof, mock-echo variants, index-signature-backed
-  checks). Deleted only with `--aggressive`. Categories marked *report-only*
-  in the output (conditional-assert, swallowed-assert, must-not-raise contract
-  tests) are never auto-deleted — they usually need a rewrite, not a deletion.
+  checks, rotten-green conditional asserts, unawaited async assertions). The
+  script cannot safely auto-delete these, but it records *exactly why* each is
+  uncertain. That reason is a question **you** are equipped to answer against
+  the surrounding code — so advisories are adjudicated by you (step 6), not
+  dumped on the user. `--aggressive` exists as a blunt escape hatch that deletes
+  the deletable advisories without adjudication; prefer step 6 over it.
 
 See `references/detectors.md` for the full category catalog and the reasoning
 behind each guard.
 
-### 5. Fix
+### 5. Fix the proven tier (deterministic)
 
 ```bash
-node <skill-dir>/scripts/captain_obvious_ts.mjs --project <repo> --fix [--aggressive]
-python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --fix [--aggressive]
+node <skill-dir>/scripts/captain_obvious_ts.mjs --project <repo> --fix
+python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --fix
 ```
 
-Default to proven-only (`--fix`). Add `--aggressive` when the user asked for
-an aggressive cleanup or explicitly wants assertion-free / mock-echo tests
-gone too. When unsure, fix proven first, then show the advisory list and ask.
+Plain `--fix` removes only the **proven** findings — no judgment required, no
+LLM. This is the safe deterministic core; run it first.
 
-### 6. Clean the residue
+### 6. Adjudicate the advisory tier (you decide, then confirm)
+
+Advisories are the cases determinism *can't* settle — and that's your job, not
+a report line for the user. Do **not** just forward the list, and do **not**
+reach for `--aggressive` (it deletes bluntly). For each advisory finding:
+
+1. Read the test and the code it exercises. The finding's `reason` field is a
+   pointed question — e.g. *"structural instanceof — a shaped non-instance
+   could sneak in"* → check whether anything actually constructs a non-instance
+   of that type; *"mock-echo, indirect"* → check whether a real code path runs
+   between stub and assert.
+2. Decide one of: **delete** (the doubt doesn't hold — it really is useless),
+   **keep** (the doubt holds — it's a real check), or **rewrite** (the intent
+   is valid but the assertion is broken). Rewrite is the advisory tier's real
+   value: fix the unawaited `.rejects` (`await` it), narrow a
+   `pytest.raises(Exception)` to the specific type, repair a rotten-green
+   `conditional-assert` so it actually runs.
+3. **Propose before acting.** Present a compact per-item table — finding,
+   verdict, one-line rationale, and the exact edit for rewrites — and apply
+   only what the user approves. Never auto-delete or auto-rewrite an advisory.
+
+For a large advisory set, delegate the per-item code reads to a **Sonnet
+subagent** (batch the findings; have it return verdict + rationale + proposed
+edit per item) and keep the final proposal/synthesis here — don't burn the main
+loop reading files one by one. The proven tier is never handed to a subagent;
+it's already decided.
+
+### 7. Clean the residue
 
 The scripts delete whole test blocks or individual assertion lines. That can
 leave behind: unused imports/variables (`noUnusedLocals` will flag them),
 empty `describe()` blocks, empty test classes, orphaned fixtures/mocks. Fix
 those by hand — the typechecker output is your worklist.
 
-### 7. Verify
+### 8. Verify
 
 Run the project's typecheck AND full test suite (`tsc --noEmit` + the test
 command from package.json / `pytest`). Everything must pass with the same
 result as before (minus the deleted tests). If anything regresses,
 `git checkout -- <files>` and report what happened instead of pushing through.
 
-### 8. Report
+### 9. Report
 
-Tell the user: tests removed, assertion lines removed, per-category counts,
-lines of code saved, and the advisory/report-only findings that deserve a
-human look (especially conditional-assert — those are rotten green tests that
-should be *fixed*, not deleted).
+Tell the user: proven tests/assertions removed (per-category counts, lines
+saved), the advisory verdicts you applied (deleted / rewritten, with the fix),
+and anything you chose to **keep** with the reason the doubt held — that last
+group is the tool earning trust, not failing.
 
 ## What NOT to flag (the scripts already know, but so should you)
 

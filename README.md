@@ -21,73 +21,69 @@ of LLM-generated test suites.
 
 ## 🧠 The idea: ask the type checker, not another LLM
 
-Detection is **fully deterministic** — no LLM in the loop, no per-file agent
-calls, one script invocation per repo. Instead of asking an AI "is this test
-useful?", it asks the tools that already know:
+Detection is **fully deterministic** — no LLM in the loop, one script
+invocation per repo. Instead of asking an AI "is this test useful?", it asks
+the tools that already know:
 
 - **TypeScript**: the project's own compiler API answers "what is the static
   type of this expression?" — if `typeof result === 'number'` is a fact of the
   type, the assertion is not a test.
 - **Python**: batched `mypy reveal_type` probes (one mypy run for the whole
-  repo) answer the same question for `isinstance(...)` and `is not None`.
-- **AST passes** catch the rest: tautologies, mock-echo tests, assertions
-  after a `return`, assertions swallowed by empty `catch`/`except: pass`,
-  duplicate test bodies, `len(x) >= 0`.
+  repo) answer the same for `isinstance(...)` and `is not None`.
+- **AST passes** catch the rest: tautologies, mock-echo tests, assertions after
+  a `return`, assertions swallowed by empty `catch`/`except: pass`, duplicate
+  bodies, `len(x) >= 0`.
 
 ## ✅ Proven vs ⚠️ advisory
 
-Every finding is two-tier:
+Every finding is one of two tiers, and each tier is handled by whoever can
+actually decide it:
 
-- **proven** — cannot fail, by construction. Auto-deleted by `--fix`. The
-  scripts guard every known way types lie: `any`/`unknown`, `as` casts,
-  non-null `!`, index signatures, unchecked index access, structural
-  `instanceof` (only nominal classes — private members — are provable),
-  `cast()`/`type: ignore` in Python.
-- **advisory** — almost certainly useless but not provable (assertion-free
-  tests, mock-echo variants, `pytest.raises(Exception)` as the only check).
-  Deleted only with `--fix --aggressive`; the report-only subset (rotten-green
-  conditional assertions, unawaited async assertions) is never auto-deleted —
-  those need a rewrite, not a deletion.
+- **proven** — cannot fail, by construction. Auto-deleted by `--fix`, **no LLM
+  involved**. The scripts guard every known way types lie: `any`/`unknown`,
+  `as` casts, non-null `!`, index signatures, unchecked index access, structural
+  `instanceof` (only nominal classes are provable), `cast()`/`type: ignore`.
+- **advisory** — almost certainly useless but *not* provable (structural
+  `instanceof`, mock-echo variants, `pytest.raises(Exception)`, unawaited async
+  assertions, rotten-green conditional asserts). The script writes down exactly
+  *why* it's uncertain, and the coding agent running the skill adjudicates each
+  one against the surrounding code — **delete, keep, or rewrite** — then
+  proposes the calls for your approval before touching anything.
 
 It also knows what **not** to flag: `toBeDefined()` on `.find()` results
 (`T | undefined` — a real check), enum contract locks, custom assertion
-helpers, deliberate determinism tests (`expect(f(x)).toEqual(f(x))` when the
-test says "stable"), and "must not raise" contract tests.
+helpers, deliberate determinism tests, and "must not raise" contract tests.
 
 ## 📊 Real-world results
 
-- Internal repo, ~1,800 pytest tests: **124 lines of test theater deleted
-  across 21 files** — 111 assertions re-checking what mypy already guaranteed,
-  plus one all-constant test. Type-checker green and full CI green before and
-  after; the change was auto-approved.
-- Hand-curated TypeScript CLI repo, ~730 tests: **zero deletions** (it doesn't
-  invent work) — but it caught one real bug: a `.rejects.toThrow(...)`
-  assertion that was never `await`ed, so it silently never ran.
+- Internal repo, ~1,800 pytest tests: **124 lines deleted across 21 files** —
+  111 assertions re-checking what mypy already guaranteed, plus one all-constant
+  test. Type-checker and full CI green before and after; change auto-approved.
+- TypeScript CLI repo, ~730 tests: **zero deletions** (it doesn't invent work)
+  — but it caught a real bug: a `.rejects.toThrow(...)` never `await`ed, so it
+  silently never ran.
 
-The tool ships to `--fix` only what it can *prove*, so the honest headline is
-not a line count — it's that you can run it on your own repo and trust that
-whatever it deletes could never have caught a regression. Clone it and check.
+The honest headline isn't a line count — it's that `--fix` only removes what it
+can *prove*, so whatever it deletes could never have caught a regression. Clone
+it and run it on your own repo.
 
-## 🚀 Install
+## 🚀 Install & use
 
 ```bash
 npx skills add shmulc8/captain-obvious@captain-obvious
 ```
 
-Or as a Claude Code plugin: this repo carries a `.claude-plugin/plugin.json`
-manifest. Or just copy `skills/captain-obvious/` into `~/.claude/skills/`.
-
-Then ask your agent to *"clean up the useless tests"* — or run the scanners
-directly:
+Also ships a `.claude-plugin/plugin.json` manifest, or copy
+`skills/captain-obvious/` into `~/.claude/skills/`. Then ask your agent to
+*"clean up the useless tests"* — or run the scanners directly:
 
 ```bash
-# report-only
-node skills/captain-obvious/scripts/captain_obvious_ts.mjs --project <repo> [--json out.json]
-python3 skills/captain-obvious/scripts/captain_obvious_py.py --path <repo> --mypy "uv run mypy"
+# report-only (add --json out.json to save)
+node    skills/captain-obvious/scripts/captain_obvious_ts.mjs --project <repo>
+python3 skills/captain-obvious/scripts/captain_obvious_py.py  --path <repo> --mypy "uv run mypy"
 
-# delete proven findings (clean git tree required — review the diff after)
-node ... --fix          # proven only
-python3 ... --fix --aggressive   # also assertion-free & mock-echo tests
+# delete proven findings (needs a clean git tree — review the diff after)
+node ... --fix
 ```
 
 ## 🔍 Detector catalog
@@ -102,37 +98,22 @@ python3 ... --fix --aggressive   # also assertion-free & mock-echo tests
 | `dead-assert` / `swallowed-assert` / `never-asserts` | assertion after `return`, or inside `try {} catch {}` | proven |
 | `duplicate-test` | identical body in the same suite | proven |
 | `no-assert` | no assertion anywhere ("Unknown Test" smell) | advisory |
-| `conditional-assert` | assertion gated behind `if` — rotten green (ICSE '19) | report-only |
-| `floating-async-assert` | unawaited `expect(p).rejects...` (silent pass under Jest) | report-only |
-| `smoke-only` | `expect(fn).not.toThrow()` as the only check | report-only |
-| `self-compare-call` | `expect(f(a)).toEqual(f(a))` | report-only |
-| `broad-raises` | `pytest.raises(Exception)` as the only check | report-only |
+| `conditional-assert` | assertion gated behind `if` — rotten green (ICSE '19) | advisory |
+| `floating-async-assert` | unawaited `expect(p).rejects...` (silent pass under Jest) | advisory |
+| `smoke-only` | `expect(fn).not.toThrow()` as the only check | advisory |
+| `self-compare-call` | `expect(f(a)).toEqual(f(a))` | advisory |
+| `broad-raises` | `pytest.raises(Exception)` as the only check | advisory |
 | `skipped-test` | `it.skip` / `xit` / `@pytest.mark.skip` — never runs | advisory |
 
-Full semantics, escape hatches, and false-positive guards:
-[`skills/captain-obvious/references/detectors.md`](skills/captain-obvious/references/detectors.md)
-
-## 📚 Grounding
-
-- *Rotten Green Tests* — Delplanque et al., ICSE 2019
-- Test smell catalogs / tsDetect, JNose ("Unknown Test", "Conditional Test Logic")
-- Pseudo-tested methods — Niedermayr 2016; Descartes, ASE 2018 (the dynamic ceiling this static tool approximates)
-- *On the Diffusion of Test Smells in LLM-Generated Unit Tests* (2024)
-- *Effective TypeScript* — "Seven Sources of Unsoundness"
+Full semantics, escape hatches, and false-positive guards — plus academic
+grounding (ICSE '19 *Rotten Green Tests*, tsDetect/JNose smell catalogs,
+Descartes pseudo-tested methods) — are in
+[`references/detectors.md`](skills/captain-obvious/references/detectors.md).
 
 ## ⚠️ Honest limitations
 
-- Cannot catch weak-but-executing assertions (`expect(result.length >= 0)` is
-  caught, `expect(result.length).toBeLessThan(1e9)` is not) — only mutation
-  testing proves those useless.
+- Cannot catch weak-but-executing assertions (`result.length >= 0` is caught,
+  `result.length < 1e9` is not) — only mutation testing proves those useless.
 - Cross-file duplicates and coverage-subsumption are out of scope.
 - Dynamically-built assertions are invisible.
 - "Deleted nothing" does not mean "your suite is sound."
-
-## 📂 Repository structure
-
-- [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) – plugin manifest
-- [`skills/captain-obvious/SKILL.md`](skills/captain-obvious/SKILL.md) – agent workflow (scan → review → fix → verify)
-- [`skills/captain-obvious/scripts/captain_obvious_ts.mjs`](skills/captain-obvious/scripts/captain_obvious_ts.mjs) – TypeScript detector (compiler API)
-- [`skills/captain-obvious/scripts/captain_obvious_py.py`](skills/captain-obvious/scripts/captain_obvious_py.py) – Python detector (AST + mypy reveal_type)
-- [`skills/captain-obvious/references/detectors.md`](skills/captain-obvious/references/detectors.md) – full detector catalog and guards
