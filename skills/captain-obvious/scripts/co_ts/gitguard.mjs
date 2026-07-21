@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 
 /**
  * Why --fix should not run here, or null if it's safe.
@@ -9,6 +10,9 @@ import { spawnSync } from 'node:child_process';
  * fine — they can't be clobbered by an in-place rewrite.
  */
 export function fixBlocker(projectDir) {
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory())
+    return `${projectDir} is not an existing directory`;
+
   const git = (args) =>
     spawnSync('git', args, { cwd: projectDir, encoding: 'utf8', timeout: 60000 });
 
