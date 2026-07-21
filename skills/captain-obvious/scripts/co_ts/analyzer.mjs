@@ -3,7 +3,8 @@ import {
   walk,
   rootIdentifier,
   isLiteralish,
-  literalValue
+  literalValue,
+  assertionMachineryNodes
 } from './ast_utils.mjs';
 import { parseExpectation } from './expect_parser.mjs';
 import { detectMockEcho } from './mock_echo.mjs';
@@ -122,8 +123,13 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
   };
 
   const swallowed = new Set();
+  // Everything lexically inside a try{} whose catch is silent: if it throws,
+  // the catch absorbs it, so it can never fail the test and therefore never
+  // counts as coverage worth preserving.
+  const silentlyGuarded = new Set();
   walk(ts, fn, n => {
     if (ts.isTryStatement(n) && n.catchClause && isSilentCatch(ts, n.catchClause)) {
+      walk(ts, n, m => silentlyGuarded.add(m));
       walk(ts, n.tryBlock, m => {
         if (ts.isCallExpression(m)) {
           const root = rootIdentifier(ts, m.expression);
@@ -176,8 +182,27 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
     return;
   }
   if (liveAsserts.length === 0) {
-    rec.findings.push({ category: 'never-asserts', level: 'proven', deletable: 'safe',
-      reason: 'every assertion in this test is unreachable or swallowed — the test can never fail', stmtRef: null });
+    // Every assertion is dead or swallowed, so the assertions can't fail the
+    // test — but an UNGUARDED call still can, by throwing. Deleting the test
+    // would drop that signal. A call inside a silently-caught try{} is not
+    // such a signal (the catch absorbs the throw), so it doesn't count; nor
+    // does the assertion machinery itself, nor console logging.
+    const machinery = assertionMachineryNodes(ts, realAsserts);
+    let remnant = false;
+    walk(ts, body, n => {
+      if (remnant) return;
+      if (!ts.isCallExpression(n) && !ts.isNewExpression(n)) return;
+      if (machinery.has(n) || silentlyGuarded.has(n)) return;
+      if (rootIdentifier(ts, n.expression) === 'console') return;
+      remnant = true;
+    });
+    rec.findings.push(remnant
+      ? { category: 'never-asserts', level: 'advisory', deletable: 'report-only', stmtRef: null,
+          reason: 'every assertion is dead or swallowed, but an unguarded call remains that can ' +
+            'still fail this test by throwing — deleting it would drop that signal. Repair the ' +
+            'assertion, or delete by hand once you have confirmed the call cannot fail' }
+      : { category: 'never-asserts', level: 'proven', deletable: 'safe', stmtRef: null,
+          reason: 'every assertion in this test is unreachable or swallowed — the test can never fail' });
     for (const f of rec.findings) allFindings.push(toReportFinding(projectDir, rec, f));
     testRecords.push(rec);
     return;
