@@ -17,6 +17,17 @@ from .ast_utils import (
     ASSERT_NAME_RE,
 )
 
+def _is_noise_call(node: ast.Call) -> bool:
+    """print()/logging.* — never meaningful coverage, so they don't count as
+    executable remnants keeping an otherwise-inert test alive."""
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id == "print"
+    while isinstance(f, ast.Attribute):
+        f = f.value
+    return isinstance(f, ast.Name) and f.id in ("logging", "log", "logger")
+
+
 def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                  probes: list[Probe], records: list[TestRecord]):
     helpers = HelperIndex(tree)
@@ -73,8 +84,14 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
 
         # -- swallowed: asserts inside try: with a silent except — cannot fail
         swallowed_ids: set[int] = set()
+        # Everything lexically inside a try: whose handlers are all silent. If
+        # it raises, the handler absorbs it, so it can never fail the test and
+        # therefore never counts as coverage worth preserving.
+        silently_guarded: set[int] = set()
         for d in walk_no_nested_funcs(fn):
             if isinstance(d, ast.Try) and d.handlers and all(silent_handler(h) for h in d.handlers):
+                for x in ast.walk(d):
+                    silently_guarded.add(id(x))
                 for x in ast.walk(ast.Module(body=d.body, type_ignores=[])):
                     if isinstance(x, ast.Assert) or (isinstance(x, ast.Call) and is_assertionish_call(x)):
                         swallowed_ids.add(id(x))
@@ -152,9 +169,30 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                     "worth a look if an assertion was clearly intended here"))
             return
         if not live:
-            rec.findings.append(Finding(
-                path, fn.lineno, fn.name, "never-asserts", "proven", "safe",
-                "every assertion is unreachable or swallowed — the test can never fail"))
+            # Every assertion is dead or swallowed, so the assertions can't
+            # fail the test — but an UNGUARDED call still can, by raising.
+            # Deleting the test would drop that signal. A call inside a
+            # silently-caught try: is not such a signal (the handler absorbs
+            # the raise), so it doesn't count; nor does the assertion
+            # machinery itself, nor print/logging.
+            assert_ids = {id(a) for a in assert_nodes}
+            remnant = any(
+                isinstance(d, ast.Call)
+                and id(d) not in assert_ids
+                and id(d) not in silently_guarded
+                and not _is_noise_call(d)
+                for d in walk_no_nested_funcs(fn))
+            if remnant:
+                rec.findings.append(Finding(
+                    path, fn.lineno, fn.name, "never-asserts", "advisory", "report-only",
+                    "every assertion is dead or swallowed, but an unguarded call remains that "
+                    "can still fail this test by raising — deleting it would drop that signal. "
+                    "Repair the assertion, or delete by hand once you have confirmed the call "
+                    "cannot fail"))
+            else:
+                rec.findings.append(Finding(
+                    path, fn.lineno, fn.name, "never-asserts", "proven", "safe",
+                    "every assertion is unreachable or swallowed — the test can never fail"))
             return
 
         # -- conditional (rotten green): a live assert that may never execute

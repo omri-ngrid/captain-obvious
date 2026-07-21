@@ -55,6 +55,23 @@ export function isSilentCatch(ts, catchClause) {
     rootIdentifier(ts, s.expression.expression) === 'console');
 }
 
+// The call nodes that make up the assertion itself — for `expect(x).toBe(1)`
+// that is the `.toBe(1)` call, the `expect(...)` call, and the property access
+// between them, but NOT the argument expressions. Callers use this to tell
+// assertion machinery apart from code the test genuinely exercises.
+export function assertionMachineryNodes(ts, assertCalls) {
+  const nodes = new Set();
+  for (const c of assertCalls) {
+    let n = c;
+    while (n) {
+      nodes.add(n);
+      if (ts.isCallExpression(n) || ts.isPropertyAccessExpression(n)) n = n.expression;
+      else break;
+    }
+  }
+  return nodes;
+}
+
 export function hasElementAccess(ts, node) {
   let found = false;
   walk(ts, node, n => { if (ts.isElementAccessExpression(n)) found = true; });
