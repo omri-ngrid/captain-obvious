@@ -363,7 +363,7 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
           if (!overlaps) {
             const cline = sf.getLineAndCharacterOfPosition(s.getStart(sf)).line + 1;
             rec.findings.push({ category: 'missed-skip', level: 'advisory', deletable: 'report-only',
-              reason: `conditional early return/skip at line ${cline} precedes assertions — if the condition is met, assertions will be skipped and the test will pass silently`, stmtRef: null });
+              reason: `conditional early return/skip at line ${cline} precedes assertions — if the condition is met, the remaining assertions never run (a bare return passes silently; this.skip() at least reports a skip)`, stmtRef: null });
           }
         }
       }

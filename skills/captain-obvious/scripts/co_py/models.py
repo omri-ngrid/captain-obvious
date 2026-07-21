@@ -39,4 +39,3 @@ class TestRecord:
         self.conditional = 0
         self.is_duplicate = False
         self.body_key = None
-        self.deletable_stmt_nodes: list[ast.AST] = []  # proven per-line removals

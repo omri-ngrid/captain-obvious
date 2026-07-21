@@ -88,6 +88,8 @@ def enclosing_function_names(sites: set[tuple[str, int]]) -> set[str]:
 
 def propagate_laundering(root: str, seed: set[str]) -> set[str]:
     """Grow the Any-laundering function set transitively."""
+    if not seed:
+        return set()   # nothing to propagate — skip the whole-repo parse
     returns_calls: dict[str, set[str]] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
@@ -277,7 +279,5 @@ def resolve_probes(probes: list[Probe], records: list[TestRecord], root: str,
                             f'revealed type is "{p.revealed}", but a subclass instance would still fail type() is — advisory', node=a)
         if f is not None:
             rec.findings.append(f)
-            if f.deletable in ("safe", "aggressive"):
-                rec.deletable_stmt_nodes.append(a)
         else:
             rec.nonredundant += 1

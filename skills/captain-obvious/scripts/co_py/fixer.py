@@ -56,8 +56,6 @@ def apply_fix(records: list[TestRecord], root: str):
             whole = True
         elif any(f.category == "never-asserts" and want(f) for f in rec.findings):
             whole = True
-        elif any(f.category in ("no-assert", "skipped-test") and want(f) for f in rec.findings):
-            whole = True
         else:
             deletable = [f for f in rec.findings if f.node is not None and want(f)
                          and f.category != "dead-assert"]

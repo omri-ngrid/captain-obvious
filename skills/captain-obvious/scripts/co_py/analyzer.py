@@ -149,7 +149,6 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                     rec.findings.append(Finding(
                         path, a.lineno, fn.name, "dead-assert", "proven", "safe",
                         "sits after an unconditional return/raise — never executes", node=a))
-                    rec.deletable_stmt_nodes.append(a)
                 continue
             live.append(a)
 
@@ -299,7 +298,7 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                         if not (cond_names & param_names):
                             rec.findings.append(Finding(
                                 path, s.lineno, fn.name, "missed-skip", "advisory", "report-only",
-                                f"conditional early return/skip at line {s.lineno} precedes assertions — if the condition is met, assertions will be skipped and the test will pass silently"))
+                                f"conditional early return/skip at line {s.lineno} precedes assertions — if the condition is met, the remaining assertions never run (a bare return passes silently; pytest.skip at least reports a skip)"))
 
         # -- mock stubs in this test: `m.return_value = V`, plus which names are
         #    bare mocks created in-test (m = MagicMock()) — asserting on a direct
@@ -378,8 +377,6 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 pass  # a mypy probe will resolve this one (or count it nonredundant)
             else:
                 rec.findings.append(f)
-                if f.deletable in ("safe", "aggressive") and f.node is not None:
-                    rec.deletable_stmt_nodes.append(f.node)
 
     tests_in(tree.body, os.path.relpath(path, root))
     return records
