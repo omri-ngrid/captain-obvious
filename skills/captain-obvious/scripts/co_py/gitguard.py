@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import subprocess
 
 def fix_blocker(root: str) -> str | None:
@@ -9,6 +10,8 @@ def fix_blocker(root: str) -> str | None:
     and the tests aren't already carrying uncommitted edits. Untracked files
     are fine — they can't be clobbered by an in-place rewrite.
     """
+    if not os.path.isdir(root):
+        return f"{root} is not an existing directory"
     try:
         inside = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],

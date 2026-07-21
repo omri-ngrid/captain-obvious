@@ -86,6 +86,14 @@ class FixRequiresCleanTree(unittest.TestCase):
         with open(self.test_file, encoding="utf-8") as fh:
             self.assertIn("test_tautology", fh.read())
 
+    def test_nonexistent_path_reports_clearly(self):
+        missing = os.path.join(self.dir, "does-not-exist")
+        proc = subprocess.run(
+            [sys.executable, CLI, "--path", missing, "--fix"],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("is not an existing directory", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
