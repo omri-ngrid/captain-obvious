@@ -1,0 +1,15 @@
+{
+  "name": "captain-obvious",
+  "owner": {
+    "name": "omri-ngrid",
+    "url": "https://github.com/omri-ngrid"
+  },
+  "description": "Captain Obvious — deterministic scanner that finds and deletes tests that can never fail. Add with: /plugin marketplace add omri-ngrid/captain-obvious",
+  "plugins": [
+    {
+      "name": "captain-obvious",
+      "source": "./",
+      "description": "Deterministic scanner that finds and deletes tests that can never fail — assertions the type checker already guarantees, tautologies, mock-echo tests, dead/swallowed assertions, and duplicates. TypeScript (Jest/Vitest/bun:test) and Python (pytest + mypy)."
+    }
+  ]
+}
