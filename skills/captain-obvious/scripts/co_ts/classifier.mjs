@@ -48,7 +48,10 @@ export function classifyExpect(ts, checker, typesAvailable, strictNull, unchecke
   }
 
   // ---- self-compare-call: expect(f(a)).toEqual(f(a))
+  // (literal subjects fall through to constant-assert below: expect(true)
+  // .toBe(true) is a proven tautology, not a maybe-nondeterministic compare)
   if (!negated && EQ_MATCHERS.has(matcher) && arg0 && !isSimpleChain(ts, subject) &&
+      !isLiteralish(ts, subject) &&
       canon(ts, subject.getText()) === canon(ts, arg0.getText()) &&
       !/stable|determin|consistent|idempotent|same|pure/i.test(exp.testTitle ?? '')) {
     return { category: 'self-compare-call', level: 'advisory', deletable: 'report-only',
