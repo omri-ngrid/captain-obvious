@@ -17,11 +17,9 @@ export function decideRemovals(ts, testRecords, doFix, report, fs, projectDir) {
       if (wants(never)) removableTests.push(rec);
       continue;
     }
-    const wholeTestCategory = rec.findings.find(f => ['no-assert', 'skipped-test'].includes(f.category));
-    if (wholeTestCategory) {
-      if (wants(wholeTestCategory)) removableTests.push(rec);
-      continue;
-    }
+    // no-assert / skipped-test are never deletable:'safe' — whole-test
+    // removal for them is the agent's call, not the fixer's
+    if (rec.findings.some(f => ['no-assert', 'skipped-test'].includes(f.category))) continue;
 
     const stmtFindings = rec.findings.filter(f => f.stmtRef);
     const deadStmts = stmtFindings.filter(f => f.category === 'dead-assert');
