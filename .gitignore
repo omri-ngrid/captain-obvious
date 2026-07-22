@@ -4,3 +4,51 @@ __pycache__/
 .venv/
 .DS_Store
 *.log
+
+# --- added by gitignore-architect (2026-07-22) ---
+
+# Secrets / credentials — NEVER commit
+.env
+.env.*
+*.env
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+client_secret*.json
+*credentials*.json
+*token*.json
+
+# OS
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+
+# Python — test/lint/build artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+
+# Claude Code / assistant state (local, per-machine)
+.remember/
+.claude/settings.local.json
+.claude/*.lock
+.worktrees/
