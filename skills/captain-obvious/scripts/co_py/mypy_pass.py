@@ -239,6 +239,12 @@ def run_mypy_probes(probes: list[Probe], root: str,
                     "mypy cannot see the code under test, so the Any-laundering guard is "
                     "unavailable; type-guaranteed findings demoted to advisory")
         return note, propagate_laundering(root, seed), laundering_visible
+    except OSError as e:
+        # e.g. read-only checkout: shadow files cannot be written next to the
+        # tests. Degrade to the syntactic categories instead of crashing the
+        # whole scan — and say so, like every other degradation path.
+        return (f"cannot write reveal_type() shadow files ({e}) — "
+                "type-guaranteed checks skipped", set(), True)
     finally:
         for s in shadow_files:
             try:
