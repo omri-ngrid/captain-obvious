@@ -1,8 +1,11 @@
-"""--fix and the mypy shadow pass must never write through a symlinked test.
+"""--fix must never write through a symlinked test file (Python + TS CLIs).
 
 Discovery lists symlinked test *files*; a plain write follows the link and
 can clobber a file outside the scanned tree (unrecoverable — git status was
-clean). The fixer must refuse. Covers the Python and TS CLIs.
+clean). The fixer must refuse. These run with --no-types, so they cover the
+fixer write path only; the separate defensive mypy shadow-symlink branch
+(mypy_pass.py, a pre-existing symlink squatting at the shadow path) is not
+exercised here.
 
 Stdlib only — run with:  python3 -m unittest discover tests
 """

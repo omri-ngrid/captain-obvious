@@ -11,6 +11,7 @@ import argparse
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -83,6 +84,9 @@ def run_check(base: str, root: str, findings: list[dict]) -> int:
               f"findings vs {base}", file=sys.stderr)
         return 0
 
+    if shutil.which("git") is None:
+        return fail_open("git not found on PATH")
+
     top = git("rev-parse", "--show-toplevel", cwd=root)
     if top.returncode != 0:
         return fail_open((top.stderr.strip().splitlines() or ["not a git repository"])[0])
@@ -102,10 +106,13 @@ def run_check(base: str, root: str, findings: list[dict]) -> int:
     def absfile(f) -> str:
         return os.path.realpath(os.path.join(root, f["file"]))
 
-    # syntactic proven only: the base-side scan is single-file (no mypy), so a
-    # type-guaranteed key would over-fire — it can never appear on the base side
+    # syntactic proven only: the base-side scan is single-file (no mypy, no
+    # coverage), so categories whose proven status depends on either —
+    # type-guaranteed (mypy) and coverage-promoted conditional-assert — can
+    # never appear proven on the base side and would over-fire the gate
     candidates = [f for f in findings
-                  if f["level"] == "proven" and f["category"] != "type-guaranteed"
+                  if f["level"] == "proven"
+                  and f["category"] not in ("type-guaranteed", "conditional-assert")
                   and absfile(f) in changed]
     if not candidates:
         return clean()
