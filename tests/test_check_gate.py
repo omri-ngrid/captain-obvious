@@ -7,6 +7,7 @@ Stdlib only — run with:  python3 -m unittest discover tests
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -25,6 +26,12 @@ CLEAN = "def test_real():\n    assert compute(1) == 2\n"
 DEAD = "def test_dead():\n    assert True\n"          # -> constant-assert, proven
 TS_CLEAN = 'test("real", () => {\n  expect(add(1, 2)).toBe(3);\n});\n'
 TS_DEAD = 'test("dead", () => {\n  expect(true).toBe(true);\n});\n'  # -> constant-assert
+
+# a conditional-assert (advisory) that --coverage promotes to proven; the
+# `assert` is on line 7 behind the platform guard
+PY_COND_SRC = ('import sys\nfrom app import compute\n\n'
+               'def test_conditional():\n    result = compute()\n'
+               '    if sys.platform == "win32":\n        assert result == 5\n')
 
 
 def _git(args, cwd):
@@ -78,17 +85,39 @@ class CheckGate(_Base):
         self.assertIn("constant-assert", r.stderr)
 
     def test_preexisting_finding_in_changed_file_passes(self):
-        # finding lives on BOTH sides of a *changed* file -> not newly introduced.
-        # This is the case that actually exercises the (category, test) seen-set:
-        # an unchanged file never reaches the dedup because it is not in the diff.
+        # finding lives on BOTH sides of a *changed* file -> not newly introduced,
+        # even though its LINE moves. Prepending the touch line shifts the dead
+        # test to a different line in HEAD vs base, so this genuinely exercises
+        # the line-independent (category, test) seen-set — the whole point of it.
         d = self.repo()
         self.write(d, "test_a.py", DEAD)
         base = self.commit(d)
-        self.write(d, "test_a.py", DEAD + "\n# touched so the file shows up in the diff\n")
+        self.write(d, "test_a.py", "# touched — shifts the finding's line\n" + DEAD)
         self.commit(d)
         r = self.check(d, base)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("clean", r.stderr)
+        # exact clean sentinel — NOT the substring "clean", which also appears in
+        # the fail-open message ("treating as clean (fail-open)")
+        self.assertIn("no newly-introduced", r.stderr)
+        self.assertNotIn("fail-open", r.stderr)
+
+    def test_coverage_promoted_conditional_is_not_gated(self):
+        # a pre-existing conditional-assert, promoted advisory->proven by
+        # --coverage on the current side, must NOT gate: the base single-file
+        # scan has no coverage, so it can never reproduce the promotion. It is
+        # excluded from candidates alongside type-guaranteed.
+        d = self.repo()
+        self.write(d, "test_cond.py", PY_COND_SRC)
+        base = self.commit(d)
+        self.write(d, "test_cond.py", PY_COND_SRC + "# touched\n")
+        self.commit(d)
+        cov = os.path.join(d, "coverage.dat")
+        with open(cov, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"files": {"test_cond.py":
+                     {"executed_lines": [1, 2, 4, 5, 6], "missing_lines": [7]}}}))
+        r = self.check(d, base, extra=("--coverage", cov))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no newly-introduced", r.stderr)
 
     def test_bad_ref_fails_open(self):
         d = self.repo()
@@ -129,6 +158,34 @@ class CheckGateTs(_Base):
         r = self.check(d, base, cli=TS_CLI)
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertIn("constant-assert", r.stderr)
+
+    def test_preexisting_ts_finding_passes(self):
+        # TS gate's clean/dedup branch: a dead test present on both sides of a
+        # changed file, its line shifted, must exit 0 with the clean sentinel
+        d = self.repo()
+        self.write(d, "a.test.ts", TS_DEAD)
+        base = self.commit(d)
+        self.write(d, "a.test.ts", "// touched — shifts the finding's line\n" + TS_DEAD)
+        self.commit(d)
+        r = self.check(d, base, cli=TS_CLI)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no newly-introduced", r.stderr)
+        self.assertNotIn("fail-open", r.stderr)
+
+    def test_bad_ref_fails_open(self):
+        d = self.repo()
+        self.write(d, "a.test.ts", TS_DEAD)
+        self.commit(d)
+        r = self.check(d, "does-not-exist", cli=TS_CLI)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("fail-open", r.stderr)
+
+    def test_check_with_fix_is_rejected(self):
+        d = self.repo()
+        self.write(d, "a.test.ts", TS_CLEAN)
+        base = self.commit(d)
+        r = self.check(d, base, cli=TS_CLI, extra=("--fix",))
+        self.assertEqual(r.returncode, 2, r.stderr)
 
 
 if __name__ == "__main__":
