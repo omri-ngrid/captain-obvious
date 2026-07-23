@@ -299,16 +299,25 @@ function checkGate(base, projectDir, findings) {
 
   const diff = spawnSync('git', ['diff', '--name-only', `${base}...HEAD`], { cwd: repo, encoding: 'utf8' });
   if (diff.status !== 0) return failOpen(String(diff.stderr).trim().split('\n')[0] || 'git diff failed');
-  // repo is realpath-resolved; do NOT realpathSync the entries (deleted files would throw)
-  const changed = new Set(diff.stdout.split('\n').filter(Boolean).map(p => path.resolve(repo, p)));
+  // realpath both sides to match abs(f): a symlinked directory component below
+  // repo would otherwise diverge and silently empty the intersection. Fall back
+  // to the plain resolved path on ENOENT (a deleted file's realpath throws).
+  const changed = new Set(diff.stdout.split('\n').filter(Boolean).map(p => {
+    const resolved = path.resolve(repo, p);
+    try { return fs.realpathSync(resolved); } catch { return resolved; }
+  }));
 
   const abs = (f) => fs.realpathSync(path.resolve(projectDir, f.file));  // findings exist on disk
   const key = (f) => `${f.category} ${f.test}`;
 
-  // syntactic proven only: base scan is single-file (no tsc), so a
-  // type-guaranteed key would over-fire — it can never appear on the base side
+  // syntactic proven only: the base scan is single-file (no tsc, no coverage),
+  // so categories whose proven status depends on either — type-guaranteed (tsc)
+  // and coverage-promoted conditional-assert — can never appear proven on the
+  // base side and would over-fire the gate
   const candidates = findings.filter(f =>
-    f.level === 'proven' && f.category !== 'type-guaranteed' && changed.has(abs(f)));
+    f.level === 'proven' &&
+    f.category !== 'type-guaranteed' && f.category !== 'conditional-assert' &&
+    changed.has(abs(f)));
   if (candidates.length === 0) return clean();
 
   const seenByFile = new Map();
@@ -321,6 +330,7 @@ function checkGate(base, projectDir, findings) {
     let baseFindings;
     try { baseFindings = JSON.parse(scan.stdout).findings; }
     catch { return failOpen(`base scan of ${rel} failed`); }
+    if (!Array.isArray(baseFindings)) return failOpen(`base scan of ${rel} produced no findings array`);
     seenByFile.set(absfile, new Set(baseFindings.filter(f => f.level === 'proven').map(key)));
   }
 
@@ -331,4 +341,15 @@ function checkGate(base, projectDir, findings) {
   return 1;
 }
 
-if (doCheck) process.exit(checkGate(baseArg, projectDir, allFindings));
+if (doCheck) {
+  let code;
+  try {
+    code = checkGate(baseArg, projectDir, allFindings);
+  } catch (e) {
+    // any unexpected throw (e.g. realpathSync ENOENT) fails OPEN — a gate must
+    // never invent a CI failure
+    console.error(`captain-obvious: --check could not compare against ${baseArg} (${(e && e.message) || e}) — treating as clean (fail-open)`);
+    code = 0;
+  }
+  process.exit(code);
+}
