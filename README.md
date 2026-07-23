@@ -133,7 +133,7 @@ the spot.
 | Category | Example | Level |
 |---|---|---|
 | `type-guaranteed` | `expect(typeof f()).toBe('number')` when `f(): number`; `assert x is not None` on non-Optional | proven |
-| `constant-assert` | `expect(true).toBe(true)`, `assert x == x` | proven |
+| `constant-assert` | `expect(true).toBe(true)`, `assert x == x` (incl. `self.assertEqual(1, 1)`-style unittest assert-methods, report-only) | proven |
 | `boundary-tautology` | `expect(arr.length).toBeGreaterThanOrEqual(0)` | proven |
 | `local-const-echo` | `const expected = 5; expect(expected).toBe(5)` | proven |
 | `mock-echo` | stub returns 5 → assert it returns 5 | proven / advisory |
