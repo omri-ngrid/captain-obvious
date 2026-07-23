@@ -31,7 +31,9 @@ the tools that already know:
 
 - **TypeScript**: the project's own compiler API answers "what is the static
   type of this expression?" — if `typeof result === 'number'` is a fact of the
-  type, the assertion is not a test.
+  type, the assertion is not a test. Plain-JS test files (`.test.js` etc.) get
+  the syntactic categories; `type-guaranteed` needs TypeScript (or stays off
+  without `checkJs`).
 - **Python**: batched `mypy reveal_type` probes (one mypy run for the whole
   repo) answer the same for `isinstance(...)` and `is not None`.
 - **AST passes** catch the rest: tautologies, mock-echo tests, assertions after
