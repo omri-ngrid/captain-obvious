@@ -92,7 +92,10 @@ if (!Number.isFinite(tsMajor) || tsMajor < 4) {
 if (fileArg) {
   const filePath = path.resolve(fileArg);
   const content = useStdin ? fs.readFileSync(0, 'utf8') : fs.readFileSync(filePath, 'utf8');
-  const kind = /\.[jt]sx$/.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const kind = /\.tsx$/.test(filePath) ? ts.ScriptKind.TSX
+    : /\.jsx$/.test(filePath) ? ts.ScriptKind.JSX
+    : /\.(js|mjs|cjs)$/.test(filePath) ? ts.ScriptKind.JS
+    : ts.ScriptKind.TS;
   const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, kind);
   const printer = ts.createPrinter({ removeComments: true });
   const findings = [];
@@ -139,7 +142,7 @@ const typesAvailable = !!tsconfigPath;
 
 const program = ts.createProgram(
   [...new Set([...configFileNames, ...testFiles.map(f => path.resolve(f))])],
-  { ...options, noEmit: true },
+  { ...options, noEmit: true, allowJs: true },
 );
 const checker = program.getTypeChecker();
 const printer = ts.createPrinter({ removeComments: true });
@@ -151,9 +154,13 @@ const testRecords = [];
 for (const file of testFiles) {
   const sf = program.getSourceFile(path.resolve(file));
   if (!sf) continue;
+  // never trust TS's inference on plain JS: without checkJs it is not a
+  // checked guarantee, so type-guaranteed must stay off for JS files
+  const isJs = /\.(js|jsx|mjs|cjs)$/.test(file);
+  const fileTypes = typesAvailable && !isJs;
   walk(ts, sf, n => {
     const t = ts.isExpressionStatement(n) ? isTestBlock(ts, n) : null;
-    if (t) analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIndex, sf, t, allFindings, testRecords, projectDir);
+    if (t) analyzeTest(ts, checker, fileTypes, strictNull, uncheckedIndex, sf, t, allFindings, testRecords, projectDir);
   });
 }
 
